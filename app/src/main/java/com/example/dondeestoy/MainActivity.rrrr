@@ -1,0 +1,574 @@
+package com.example.dondeestoy
+
+import android.Manifest
+import android.content.pm.PackageManager
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Button
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import com.example.dondeestoy.ui.theme.DondeEstoyTheme
+import kotlin.math.roundToInt
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.unit.sp
+import kotlin.math.cos
+import kotlin.math.sin
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.viewinterop.AndroidView
+import org.maplibre.android.maps.MapView
+import android.annotation.SuppressLint
+import org.maplibre.android.MapLibre
+import org.maplibre.android.WellKnownTileServer
+import org.maplibre.android.annotations.Marker
+import org.maplibre.android.annotations.MarkerOptions
+import org.maplibre.android.geometry.LatLng
+import org.maplibre.android.maps.MapLibreMap
+import java.util.Locale
+
+class MainActivity : ComponentActivity() {
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        MapLibre.getInstance(
+            this,
+            BuildConfig.MAPTILER_API_KEY,
+            WellKnownTileServer.MapTiler
+        )
+
+        setContent {
+            DondeEstoyTheme {
+
+                var ubicacion by remember {
+                    mutableStateOf<Location?>(null)
+                }
+
+                MapaConUbicacion(ubicacion)
+
+                LocalizacionScreen { nuevaUbicacion ->
+                    ubicacion = nuevaUbicacion
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun MapaConUbicacion(ubicacion: Location?) {
+
+    var mapaLibre by remember {
+        mutableStateOf<MapLibreMap?>(null)
+    }
+
+    var marcador by remember {
+        mutableStateOf<Marker?>(null)
+    }
+
+    AndroidView(
+        factory = { context ->
+
+            MapView(context).apply {
+
+                onCreate(null)
+
+                getMapAsync { map ->
+
+                    mapaLibre = map
+
+                    map.setStyle(
+                        "https://api.maptiler.com/maps/streets-v4/style.json?key=${BuildConfig.MAPTILER_API_KEY}"
+                    )
+                }
+            }
+        },
+
+        update = {
+
+            val map = mapaLibre
+            val location = ubicacion
+
+            if (map != null && location != null) {
+
+                val posicion = LatLng(
+                    location.latitude,
+                    location.longitude
+                )
+
+                if (marcador == null) {
+
+                    marcador = map.addMarker(
+                        MarkerOptions()
+                            .position(posicion)
+                            .title("Mi posición")
+                    )
+
+                    map.moveCamera(
+                        org.maplibre.android.camera.CameraUpdateFactory.newLatLngZoom(
+                            posicion,
+                            16.0
+                        )
+                    )
+
+                } else {
+
+                    marcador?.position = posicion
+                }
+            }
+        },
+
+        modifier = Modifier.fillMaxSize()
+    )
+}
+
+@Composable
+fun MapaPrueba() {
+
+    AndroidView(
+        factory = { context ->
+
+            MapView(context).apply {
+                onCreate(null)
+
+                getMapAsync { map ->
+
+                    map.setStyle(
+                        "https://api.maptiler.com/maps/streets-v4/style.json?key=${BuildConfig.MAPTILER_API_KEY}"
+                    )
+                }
+            }
+        },
+        modifier = Modifier.fillMaxSize()
+    )
+}
+
+@Composable
+@SuppressLint("MissingPermission")
+fun LocalizacionScreen(
+    onLocationChanged: (Location) -> Unit
+) {
+
+    val context = LocalContext.current
+
+    // -------------------------------------------------
+    // BRÚJULA
+    // -------------------------------------------------
+
+
+
+    var grados by remember {
+        mutableStateOf(0f)
+    }
+
+    DisposableEffect(Unit) {
+
+        val compass = CompassSensor(context) { nuevaOrientacion ->
+            grados = nuevaOrientacion
+        }
+
+        compass.start()
+
+        onDispose {
+            compass.stop()
+        }
+    }
+
+    val direccion = when (grados) {
+        in 337.5f..360f, in 0f..22.5f -> "N"
+        in 22.5f..67.5f -> "NE"
+        in 67.5f..112.5f -> "E"
+        in 112.5f..157.5f -> "SE"
+        in 157.5f..202.5f -> "S"
+        in 202.5f..247.5f -> "SO"
+        in 247.5f..292.5f -> "O"
+        in 292.5f..337.5f -> "NO"
+        else -> "N"
+    }
+
+
+    // -------------------------------------------------
+    // PERMISO DE UBICACIÓN
+    // -------------------------------------------------
+
+    var tienePermiso by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+
+    var ubicacion by remember {
+        mutableStateOf<Location?>(null)
+    }
+
+    var rumbo by remember {
+        mutableStateOf<Float?>(null)
+    }
+
+    var velocidadKmh by remember {
+        mutableStateOf(0f)
+    }
+
+    var enMovimiento by remember {
+        mutableStateOf(false)
+    }
+
+    val solicitarPermiso =
+        rememberLauncherForActivityResult(
+            ActivityResultContracts.RequestMultiplePermissions()
+        ) { permisos ->
+
+            tienePermiso =
+                permisos[Manifest.permission.ACCESS_FINE_LOCATION] == true
+        }
+
+
+    // -------------------------------------------------
+    // SI NO TENEMOS PERMISO
+    // -------------------------------------------------
+
+    if (!tienePermiso) {
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+
+            Text("DONDE ESTOY")
+
+            Text(
+                text = "Necesitamos permiso para conocer tu ubicación.",
+                modifier = Modifier.padding(16.dp)
+            )
+
+            Button(
+                onClick = {
+
+                    solicitarPermiso.launch(
+                        arrayOf(
+                            Manifest.permission.ACCESS_FINE_LOCATION,
+                            Manifest.permission.ACCESS_COARSE_LOCATION
+                        )
+                    )
+                }
+            ) {
+
+                Text("PERMITIR UBICACIÓN")
+            }
+        }
+
+    } else {
+
+        // -------------------------------------------------
+        // GPS
+        // -------------------------------------------------
+
+        val locationManager =
+            remember {
+                context.getSystemService(
+                    LocationManager::class.java
+                )
+            }
+
+
+        DisposableEffect(Unit) {
+
+            val listener = object : LocationListener {
+
+                override fun onLocationChanged(location: Location) {
+
+                    ubicacion = location
+                    onLocationChanged(location)
+                    // Rumbo GPS
+                    rumbo = if (location.hasBearing()) {
+                        location.bearing
+                    } else {
+                        null
+                    }
+
+                    // Velocidad GPS: Android la proporciona en m/s.
+                    velocidadKmh = if (location.hasSpeed()) {
+                        location.speed * 3.6f
+                    } else {
+                        0f
+                    }
+
+                    // Consideramos movimiento cuando supera 2 km/h.
+                    enMovimiento = velocidadKmh >= 2f
+                }
+                }
+
+            @SuppressLint("MissingPermission")
+            try {
+
+                locationManager.requestLocationUpdates(
+                    LocationManager.GPS_PROVIDER,
+                    1000L,
+                    1f,
+                    listener
+                )
+
+            } catch (e: SecurityException) {
+
+                // El permiso se ha perdido.
+            }
+
+
+            onDispose {
+
+                locationManager.removeUpdates(listener)
+            }
+        }
+
+
+        // -------------------------------------------------
+        // PANTALLA
+        // -------------------------------------------------
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+
+            Text("DONDE ESTOY")
+
+            Text(
+                text = "🧭 Orientación: ${grados.roundToInt()}° $direccion",
+                modifier = Modifier.padding(16.dp)
+            )
+
+            Brújula(grados = grados)
+
+            if (ubicacion == null) {
+
+                Text(
+                    text = "Buscando señal GPS...",
+                    modifier = Modifier.padding(16.dp)
+                )
+
+            } else {
+
+                Text(
+                    text = "🚗 Velocidad: %.1f km/h".format(velocidadKmh)
+                )
+
+                Text(
+                    text = if (enMovimiento) {
+                        "Estado: EN MOVIMIENTO"
+                    } else {
+                        "Estado: PARADO"
+                    }
+                )
+            }
+        }
+    }
+}
+@Composable
+
+fun Brújula(grados: Float) {
+
+    Box(
+        modifier = Modifier
+            .size(110.dp),
+        contentAlignment = Alignment.Center
+    ) {
+
+        Canvas(
+            modifier = Modifier
+                .size(105.dp)
+        ) {
+
+            // Escala respecto a la brújula original de 280 px
+            val escala = size.minDimension / 280f
+
+            val centroX = size.width / 2
+            val centroY = size.height / 2
+            val radio = size.minDimension / 2 - (5f * escala)
+
+            // Círculo exterior
+            drawCircle(
+                color = Color.DarkGray,
+                radius = radio,
+                style = Stroke(width = 3f * escala)
+            )
+
+            // Rosa de los vientos
+            rotate(
+                degrees = -grados,
+                pivot = center
+            ) {
+
+                val direcciones = listOf(
+                    "N", "E", "S", "O"
+                )
+
+                val angulos = listOf(
+                    0f, 90f, 180f, 270f
+                )
+
+                for (i in direcciones.indices) {
+
+                    val angulo = Math.toRadians(
+                        (angulos[i] - 90).toDouble()
+                    )
+
+                    val distancia = radio - (30f * escala)
+
+                    val x = centroX +
+                            cos(angulo) * distancia
+
+                    val y = centroY +
+                            sin(angulo) * distancia
+
+                    drawContext
+                        .canvas
+                        .nativeCanvas
+                        .drawText(
+                            direcciones[i],
+                            x.toFloat(),
+                            y.toFloat() + (8f * escala),
+                            android.graphics.Paint().apply {
+                                textSize = 24f * escala
+                                textAlign =
+                                    android.graphics.Paint.Align.CENTER
+                                typeface =
+                                    android.graphics.Typeface.DEFAULT_BOLD
+                            }
+                        )
+                }
+
+                // Marcas de los grados
+                for (i in 0 until 36) {
+
+                    val angulo = Math.toRadians(
+                        (i * 10 - 90).toDouble()
+                    )
+
+                    val longitud =
+                        if (i % 9 == 0) {
+                            12f * escala
+                        } else {
+                            6f * escala
+                        }
+
+                    val x1 =
+                        centroX +
+                                cos(angulo) * (radio - 2f * escala)
+
+                    val y1 =
+                        centroY +
+                                sin(angulo) * (radio - 2f * escala)
+
+                    val x2 =
+                        centroX +
+                                cos(angulo) * (radio - longitud)
+
+                    val y2 =
+                        centroY +
+                                sin(angulo) * (radio - longitud)
+
+                    drawLine(
+                        color = Color.DarkGray,
+                        start = androidx.compose.ui.geometry.Offset(
+                            x1.toFloat(),
+                            y1.toFloat()
+                        ),
+                        end = androidx.compose.ui.geometry.Offset(
+                            x2.toFloat(),
+                            y2.toFloat()
+                        ),
+                        strokeWidth = 2f * escala
+                    )
+                }
+            }
+
+            // Flecha que indica hacia dónde apunta el teléfono
+            drawLine(
+                color = Color.Red,
+                start = androidx.compose.ui.geometry.Offset(
+                    centroX,
+                    centroY + (15f * escala)
+                ),
+                end = androidx.compose.ui.geometry.Offset(
+                    centroX,
+                    centroY - (32f * escala)
+                ),
+                strokeWidth = 5f * escala
+            )
+
+            // Punta de la flecha
+            val punta = centroY - (38f * escala)
+
+            val izquierda =
+                androidx.compose.ui.geometry.Offset(
+                    centroX - (9f * escala),
+                    centroY - (24f * escala)
+                )
+
+            val derecha =
+                androidx.compose.ui.geometry.Offset(
+                    centroX + (9f * escala),
+                    centroY - (24f * escala)
+                )
+
+            val puntaOffset =
+                androidx.compose.ui.geometry.Offset(
+                    centroX,
+                    punta
+                )
+
+            drawLine(
+                color = Color.Red,
+                start = puntaOffset,
+                end = izquierda,
+                strokeWidth = 5f * escala
+            )
+
+            drawLine(
+                color = Color.Red,
+                start = puntaOffset,
+                end = derecha,
+                strokeWidth = 5f * escala
+            )
+
+            // Centro
+            drawCircle(
+                color = Color.DarkGray,
+                radius = 5f * escala,
+                center = center
+            )
+        }
+    }
+}
